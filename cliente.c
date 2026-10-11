@@ -7,7 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
 
+#define MSG_SIZE 250
 
 int main ( )
 {
@@ -17,9 +19,13 @@ int main ( )
 	-----------------------------------------------------*/
 	int sd;
 	struct sockaddr_in sockname;
-	char buffer[100];
+	char buffer[MSG_SIZE];
 	socklen_t len_sockname;
-	int salir = 0;
+	
+	fd_set readfds, auxfds;
+	int salida;
+	int recibidos;
+	int fin = 0;
 	
 	/* --------------------------------------------------
 		Se abre el socket 
@@ -27,7 +33,7 @@ int main ( )
   	sd = socket (AF_INET, SOCK_STREAM, 0);
 	if (sd == -1)
 	{
-		perror("No se puede abrir el socket cliente\n");
+		perror("No se puede abrir el socket cliente");
     		exit (1);	
 	}
 
@@ -52,45 +58,60 @@ int main ( )
 		exit(1);
 	}
 
-    // Recibir mensaje de bienvenida del servidor
-    bzero(buffer, sizeof(buffer));
-    if (recv(sd, buffer, sizeof(buffer), 0) == -1) {
-        perror("Error al recibir el mensaje de bienvenida");
-        exit(1);
-    }
+    FD_ZERO(&readfds);
+	FD_ZERO(&auxfds);
+	FD_SET(0, &readfds);
+	FD_SET(sd, &readfds);
 
-    printf("%s\n", buffer);
+	do{
+    	auxfds = readfds;
 
-	/* ------------------------------------------------------------------
-		Se transmite la información
-	-------------------------------------------------------------------*/
-	do
-	{
-		salir = 0;
-		puts("Teclee el mensaje a transmitir");
-		fgets(buffer, sizeof(buffer),stdin);
-		buffer[strlen(buffer)-1] = '\0';
-			
-		if(strcmp(buffer, "SALIR") == 0)
-			salir = 1;
+        salida = select(sd + 1, &auxfds, NULL, NULL, NULL);
 
-		// Enviar un mensaje al servidor
-		if (send(sd, buffer, sizeof(buffer), 0) == -1) {
-        		perror("Error al enviar el mensaje");
-       			 exit(1);
-   		 }
+        if(salida == -1){
+            perror("Error en la operación select");
+            exit(1);
+        }
 
-		// Recibir respuesta del servidor
-   		bzero(buffer, sizeof(buffer));
-   		if (recv(sd, buffer, sizeof(buffer), 0) == -1) {
-        		perror("Error al recibir la respuesta");
-        		exit(1);
-    		}
+        // El servidor ha enviado algo, o ha cerrado la conexión
+        if(FD_ISSET(sd, &auxfds)){
+            bzero(buffer, sizeof(buffer));
+            recibidos = recv(sd, buffer, sizeof(buffer), 0);
 
-    		printf("Respuesta del servidor: %s\n", buffer);
+            if(recibidos == -1){
+                perror("Error al recibir el mensaje");
+                exit(1);
+            }
 
-				
-	}while(!salir);
+            if(recibidos == 0){
+                printf("El servidor ha cerrado la conexión\n");
+                fin = 1;
+            }
+            else{
+                printf("%s\n", buffer);
+            }
+        }
+
+        // Se ha escrito algo por teclado
+        if(FD_ISSET(0, &auxfds)){
+            bzero(buffer, sizeof(buffer));
+
+            if(fgets(buffer, sizeof(buffer), stdin) == NULL){
+                fin = 1;    // Ctrl+D: se cierra la entrada
+            }
+            else{
+                buffer[strcspn(buffer, "\n")] = '\0';
+
+                if(send(sd, buffer, sizeof(buffer), 0) == -1){
+                    perror("Error al enviar el mensaje");
+                    exit(1);
+                }
+
+                if(strcmp(buffer, "SALIR") == 0)
+                    fin = 1;
+            }
+        }
+    }while(fin == 0);
 	
 	// Cerrar el socket del cliente	
 	close(sd);
