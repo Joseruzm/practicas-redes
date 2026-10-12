@@ -41,7 +41,7 @@ typedef struct{
     int jugador2;       // socket del jugador 2
 } Partida;
 
-void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[]);
+void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[], Partida partidas[]);
 int buscarCliente(int socket, Cliente arrayClientes[], int numClientes);
 void enviarMensaje(int socket, const char * texto);
 void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], int numClientes, Partida partidas[]);
@@ -151,7 +151,7 @@ int main(){
                             buffer[strcspn(buffer, "\n")] = '\0';
 
                             if(strcmp(buffer, "SALIR") == 0){
-                                salirCliente(i, &readfds, &numClientes, arrayClientes);
+                                salirCliente(i, &readfds, &numClientes, arrayClientes, partidas);
                             }
                             else{
                                 pos = buscarCliente(i, arrayClientes, numClientes);
@@ -165,7 +165,7 @@ int main(){
                             else
                                 printf("El cliente %d se ha desconectado\n", i);
 
-                            salirCliente(i, &readfds, &numClientes, arrayClientes);
+                            salirCliente(i, &readfds, &numClientes, arrayClientes, partidas);
                         }
                     }
                 }
@@ -177,8 +177,30 @@ int main(){
     return 0;
 }
 
-void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[]){
-    int j;
+void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[], Partida partidas[]){
+    int j, pos, posRival, p, socketRival;
+
+    pos = buscarCliente(socket, arrayClientes, *numClientes);
+
+    // Si estaba jugando, se termina la partida y se avisa al rival
+    if(pos != -1 && arrayClientes[pos].estado == EST_JUGANDO){
+        p = arrayClientes[pos].partida;
+
+        if(partidas[p].jugador1 == socket)
+            socketRival = partidas[p].jugador2;
+        else
+            socketRival = partidas[p].jugador1;
+
+        posRival = buscarCliente(socketRival, arrayClientes, *numClientes);
+
+        if(posRival != -1){
+            arrayClientes[posRival].estado = EST_VALIDADO;
+            arrayClientes[posRival].partida = -1;
+            enviarMensaje(socketRival, "+Ok. Tu oponente ha terminado la partida");
+        }
+
+        partidas[p].activa = 0;
+    }
 
     close(socket);
     FD_CLR(socket, readfds);
