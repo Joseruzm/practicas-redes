@@ -1,16 +1,16 @@
-// ============================================================================
-//  CABECERAS
-// ============================================================================
-#include <stdio.h>          // printf, perror, fopen, fclose, fscanf, fprintf, sscanf
-#include <sys/types.h>      // tipos básicos del sistema (socklen_t, etc.)
-#include <sys/socket.h>     // socket, bind, listen, accept, send, recv, setsockopt
-#include <netinet/in.h>     // struct sockaddr_in, htons, INADDR_ANY
-#include <arpa/inet.h>      // inet_ntoa (pasa una IP binaria a texto "127.0.0.1")
-#include <netdb.h>          // funciones de red (nombres de host...). Aquí no se usa nada concreto
-#include <stdlib.h>         // exit
-#include <string.h>         // strcmp, strcpy, strncpy, strlen, strcspn, bzero
-#include <unistd.h>         // close
-#include <sys/select.h>     // select, fd_set, FD_ZERO, FD_SET, FD_ISSET, FD_CLR, FD_SETSIZE
+#include <stdio.h>         
+#include <sys/types.h>      
+#include <sys/socket.h>    
+#include <netinet/in.h>     
+#include <arpa/inet.h>      
+#include <netdb.h>          
+#include <stdlib.h>         
+#include <string.h>         
+#include <unistd.h>         
+#include <sys/select.h>     
+#include <time.h>
+
+
 
 // ============================================================================
 //  CONSTANTES
@@ -39,6 +39,18 @@
 #define EST_ESPERANDO 3     // esperando rival para jugar
 #define EST_JUGANDO 4       // jugando una partida
 
+// Definimos el tablero y las unidades iniciales de cada jugador
+#define FILAS 5
+#define COLUMNAS 5
+
+#define UNIDADES_INICIALES 30
+
+// Estructura que define cada casilla del tablero (cada territorio)
+typedef struct {
+    int propietario;  // Esta a 0 si el territorio es neutral, a 1 si pertenece al jugador 1 y a 2 si pertenece al 2
+    int unidades;     // Cuántas tropas hay en el territorio y vale 0 si el territorio es neutral
+} Territorio;
+
 // ============================================================================
 //  ESTRUCTURAS DE DATOS
 // ============================================================================
@@ -59,6 +71,7 @@ typedef struct{
     int activa;         // 1 si la partida está jugandose, 0 si no está activa
     int jugador1;       // socket del jugador 1 
     int jugador2;       // socket del jugador 2
+    Territorio tablero[FILAS][COLUMNAS];    // Estado de cada territorio de la partida en concreto
 } Partida;
 
 // ============================================================================
@@ -68,25 +81,44 @@ typedef struct{
 
 // Elimina a un cliente (cierra su socket, lo saca del array y termina su partida si estaba jugando)
 void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[], Partida partidas[]);
+
 // Devuelve en qué posición del array está el cliente con ese socket
 int buscarCliente(int socket, Cliente arrayClientes[], int numClientes);
+
 // Envía un mensaje de texto a un cliente
 void enviarMensaje(int socket, const char * texto);
+
 // Interpreta el mensaje de un cliente y actúa según el comando y el estado del cliente
 void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], int numClientes, Partida partidas[]);
+
 // Comprueba si un usuario (y opcionalmente su contraseña) está en el fichero
 int comprobarUsuario(char usuario[], char password[]);
+
 // Añade un usuario nuevo al fichero
 int registrarUsuario(char usuario[], char password[]);
+
 // Busca un cliente que esté esperando rival
 int buscarEnEspera(Cliente arrayClientes[], int numClientes);
+
 // Busca un hueco libre en el array de partidas
 int buscarPartidaLibre(Partida partidas[]);
+
+// Metodo que prepara el tablero de una partida nueva
+void iniciarTablero(Partida *partida);
+
+// Método que devuelve 1 si el socket es el jugador 1 o 2 si es el jugador 2
+int numeroJugador(Partida *partida, int socket);
+
+// Método que envía a un jugador el estado del tablero, solo con lo que puede ver
+void enviarEstado(int socket, Partida *partida, int jugador);
 
 // ============================================================================
 //  MAIN
 // ============================================================================
 int main(){
+    // Inicializamos el generador de números aleatorios
+    srand(time(NULL));
+
     // sd = socket de escucha (el que recibe las conexiones nuevas)
     // new_sd = socket nuevo que devuelve accept para hablar con un cliente concreto
     int sd, new_sd;
@@ -283,12 +315,7 @@ int main(){
     return 0;
 }
 
-// ============================================================================
-//  salirCliente: elimina a un cliente del servidor
-//  - Si estaba jugando, termina la partida y avisa al rival
-//  - Cierra su socket y lo quita de select y del array de clientes
-//  Se usa tanto con el comando SALIR como cuando el cliente se desconecta de golpe
-// ============================================================================
+
 void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[], Partida partidas[]){
     // pos = posición del cliente que se va; posRival = posición de su rival
     // p = índice de la partida; socketRival = socket del rival
@@ -342,10 +369,7 @@ void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente array
     (*numClientes)--;
 }
 
-// ============================================================================
-//  buscarCliente: devuelve la posición del cliente en el array a partir de su socket
-// ============================================================================
-// Devuelve la posición del cliente en el array, o -1 si no está
+
 int buscarCliente(int socket, Cliente arrayClientes[], int numClientes){
     int j;
 
@@ -361,10 +385,7 @@ int buscarCliente(int socket, Cliente arrayClientes[], int numClientes){
     return -1;
    }
 
-// ============================================================================
-//  enviarMensaje: envía un texto al cliente
-// ============================================================================
-// Envía siempre un bloque de MAX_MSG bytes, como acordamos con el cliente
+
 void enviarMensaje(int socket, const char * texto){
     char buffer[MAX_MSG];
 
@@ -378,17 +399,13 @@ void enviarMensaje(int socket, const char * texto){
         perror("Error en la operación send");
 }
 
-// ============================================================================
-//  procesarMensaje: núcleo del protocolo.
-//  Recibe el mensaje ya sin '\n', lo trocea en palabras y, según el comando
-//  y el ESTADO del cliente, decide qué hacer y qué responder.
-// ============================================================================
+
 void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], int numClientes, Partida partidas[]){
     // comando = primera palabra del mensaje; arg1, arg2, arg3 = las siguientes palabras
     char comando[MAX_MSG], arg1[MAX_MSG], arg2[MAX_MSG], arg3[MAX_MSG];
     // campos = nº de palabras del mensaje
     // hueco = índice de partida libre; rival = posición en el array del cliente que esperaba
-    int campos, hueco, rival;
+    int campos, hueco, rival, jugador;
 
     // Limpiamos las cadenas para que no tengan basura
     bzero(comando, sizeof(comando));
@@ -511,6 +528,9 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
                     partidas[hueco].jugador1 = arrayClientes[rival].socket;
                     partidas[hueco].jugador2 = cliente->socket;
 
+                    // Iniciamos el tablero como partida nueva
+                    iniciarTablero(&partidas[hueco]);
+
                     // Actualizamos el estado y la partida de los dos jugadores
                     arrayClientes[rival].estado = EST_JUGANDO;
                     arrayClientes[rival].partida = hueco;
@@ -525,19 +545,31 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
         }
     }
 
-    // Aquí irá INICIAR-PARTIDA...
+    else if(strcmp(comando, "ESTADO") == 0){
 
-    // ------------------------------------------- Cualquier otra cosa: error
+        // Solo tiene sentido dentro de una partida
+        if(cliente->estado != EST_JUGANDO){
+            enviarMensaje(cliente->socket, "-Err. Comando no válido en este momento");
+        }
+        // El comando no lleva argumentos
+        else if(campos != 1){
+            enviarMensaje(cliente->socket, "-Err. Formato incorrecto. Uso: ESTADO");
+        }
+        else{
+            // Averiguamos si este cliente es el jugador 1 o el 2 de su partida
+            jugador = numeroJugador(&partidas[cliente->partida], cliente->socket);
+
+            // Le enviamos el tablero tal y como debe verlo él
+            enviarEstado(cliente->socket, &partidas[cliente->partida], jugador);
+        }
+    }
+
     else{
         enviarMensaje(cliente->socket, "-Err. Comando desconocido");
     }
 }
 
-// ============================================================================
-//  comprobarUsuario: consulta el fichero de usuarios
-// ============================================================================
-// Busca el usuario en el fichero. Si password es NULL, solo comprueba que
-// el usuario exista; si no, comprueba que usuario y contraseña coincidan.
+
 int comprobarUsuario(char usuario[], char password[]){
     // Puntero al fichero
     FILE * f;
@@ -569,10 +601,7 @@ int comprobarUsuario(char usuario[], char password[]){
     return encontrado;
 }
 
-// ============================================================================
-//  registrarUsuario: añade un usuario al fichero
-// ============================================================================
-// Añade un usuario al final del fichero. Devuelve 1 si lo consigue, 0 si falla.
+
 int registrarUsuario(char usuario[], char password[]){
     FILE * f;
 
@@ -591,10 +620,7 @@ int registrarUsuario(char usuario[], char password[]){
     return 1;
 }  
 
-// ============================================================================
-//  buscarEnEspera: localiza a un jugador que espera rival
-// ============================================================================
-// Devuelve la posición del cliente que espera rival, o -1 si no hay ninguno
+
 int buscarEnEspera(Cliente arrayClientes[], int numClientes){
     int j;
 
@@ -608,10 +634,7 @@ int buscarEnEspera(Cliente arrayClientes[], int numClientes){
     return -1;
 }
 
-// ============================================================================
-//  buscarPartidaLibre: localiza un hueco en el array de partidas
-// ============================================================================
-// Devuelve el primer hueco libre del array de partidas, o -1 si están las 4 ocupadas
+
 int buscarPartidaLibre(Partida partidas[]){
     int j;
 
@@ -624,3 +647,82 @@ int buscarPartidaLibre(Partida partidas[]){
     // Todas ocupadas
     return -1;
 }
+
+// Iniciamos el tablero para una partida nueva
+// Se le asigna un territorio inicial al azar a cada jugador
+void iniciarTablero(Partida * partida){
+    // Coordenadas (fila, columna) del territorio inicial de cada jugador
+    int f1, c1, f2, c2;
+
+    // Todos los territorios empiezan neutrales y sin unidades
+    for(int f = 0; f < FILAS; f++){
+        for(int c = 0; c < COLUMNAS; c++){
+            partida->tablero[f][c].propietario = 0;
+            partida->tablero[f][c].unidades = 0;
+        }
+    }
+
+    // Territorio inicial del jugador 1 al azar
+    // rand() % FILAS da un número entre 0 y FILAS-1
+    f1 = rand() % FILAS;
+    c1 = rand() % COLUMNAS;
+
+    // Territorio inicial del jugador 2 al azar
+    // Repetimos hasta que sean distintos los territorios iniciales para cada jugador
+    do{
+        f2 = rand() % FILAS;
+        c2 = rand() % COLUMNAS;
+    }while(f2 == f1 && c2 == c1);
+
+    // Cada jugador empieza con 30 unidades en su territorio
+    partida->tablero[f1][c1].propietario = 1;
+    partida->tablero[f1][c1].unidades = UNIDADES_INICIALES;
+    partida->tablero[f2][c2].propietario = 2;
+    partida->tablero[f2][c2].unidades = UNIDADES_INICIALES;
+}
+
+// Devuelve 1 o 2 según el jugador y el socket
+int numeroJugador(Partida * partida, int socket){
+    if(partida->jugador1 == socket){
+        return 1;
+    }
+    return 2;
+}
+
+// Le manda a un jugador como esta el tablero, 
+// con las restricciones del enunciado
+void enviarEstado(int socket, Partida * partida, int jugador){
+    char linea[MAX_MSG], celda[32], texto[32];
+    int f, c;
+
+    enviarMensaje(socket, "+Ok. Estado del tablero");
+
+    // Primera línea: los números de columna
+    strcpy(linea, "  ");
+    for(c = 0; c < COLUMNAS; c++){
+        sprintf(celda, "%-8d", c + 1);
+        strcat(linea, celda);
+    }
+    enviarMensaje(socket, linea);
+
+    // Una línea por cada fila del tablero
+    for(f = 0; f < FILAS; f++){
+        // La línea empieza con la letra de la fila
+        sprintf(linea, "%c ", 'A' + f);
+
+        for(c = 0; c < COLUMNAS; c++){
+            if(partida->tablero[f][c].propietario == 0)
+                strcpy(texto, "-");
+            else if(partida->tablero[f][c].propietario == jugador)
+                sprintf(texto, "J%d(%d)", jugador, partida->tablero[f][c].unidades);
+            else
+                sprintf(texto, "J%d", partida->tablero[f][c].propietario);
+
+            // %-8s rellena con espacios hasta 8 caracteres para que las columnas queden alineadas
+            sprintf(celda, "%-8s", texto);
+            strcat(linea, celda);
+        }
+
+        enviarMensaje(socket, linea);
+    }
+   }
