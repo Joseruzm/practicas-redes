@@ -683,6 +683,10 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
                 // Las unidades trasladadas se descuentan del territorio de origen
                 partida->tablero[filaO][colO].unidades -= unidades;
 
+                // Comprobar si está a 0 sea neutral
+                if (partida->tablero[filaO][colO].unidades == 0) {
+                    partida->tablero[filaO][colO].propietario = 0;
+                }
                 // El destino pasa a ser del jugador y se queda con las unidades trasladadas
                 partida->tablero[filaD][colD].propietario = jugador;
                 partida->tablero[filaD][colD].unidades = unidades;
