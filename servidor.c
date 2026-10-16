@@ -10,8 +10,6 @@
 #include <sys/select.h>     
 #include <time.h>
 
-
-
 // ============================================================================
 //  CONSTANTES
 // ============================================================================
@@ -82,8 +80,7 @@ typedef struct{
 } Partida;
 
 // ============================================================================
-//  PROTOTIPOS (se declaran aquí para poder usar las funciones en el main
-//  aunque estén definidas más abajo en el fichero)
+//  PROTOTIPOS de funciones auxiliares
 // ============================================================================
 
 // Elimina a un cliente (cierra su socket, lo saca del array y termina su partida si estaba jugando)
@@ -128,15 +125,21 @@ void avisarTurno(Partida *partida);
 // Método que prepara el control de turnos de una partida nueva (decide quién empieza y avisa)
 void iniciarTurnos(Partida *partida);
 
-// Método que termina el turno actual, pasa el turno al otro jugador y se lo avisa
-void cambiarTurno(Partida *partida);
-
 // Método que convierte un territorio escrito como texto (por ejemplo "B3") en fila y columna.
 // Devuelve 1 si el territorio existe y 0 si no existe
 int convertirTerritorio(const char *texto, int *fila, int *columna);
 
 // Método que devuelve 1 si dos territorios (dados por fila y columna) son adyacentes y 0 si no lo son
 int sonAdyacentes(int f1, int c1, int f2, int c2);
+
+// Método que deja neutral un territorio si se ha quedado sin unidades(lo hacemos con una función porque lo necesitamos en varios casos)
+void liberarSiVacio(Partida *partida, int fila, int columna);
+
+int contarTerritorios(Partida *partida, int jugador);
+
+void finalizarPartida(Partida *partida, Cliente arrayClientes[], int numClientes);
+
+void cambiarTurno(Partida *partida, Cliente arrayClientes[], int numClientes);
 
 // ============================================================================
 //  MAIN
@@ -613,7 +616,7 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
             enviarMensaje(cliente->socket, "+Ok. Turno finalizado");
 
             // Pasamos el turno al otro jugador (esto también le avisa a él)
-            cambiarTurno(&partidas[cliente->partida]);
+            cambiarTurno(&partidas[cliente->partida], arrayClientes, numClientes);
         }
     }
 
@@ -684,9 +687,8 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
                 partida->tablero[filaO][colO].unidades -= unidades;
 
                 // Comprobar si está a 0 sea neutral
-                if (partida->tablero[filaO][colO].unidades == 0) {
-                    partida->tablero[filaO][colO].propietario = 0;
-                }
+                liberarSiVacio(partida, filaO, colO);
+
                 // El destino pasa a ser del jugador y se queda con las unidades trasladadas
                 partida->tablero[filaD][colD].propietario = jugador;
                 partida->tablero[filaD][colD].unidades = unidades;
@@ -696,7 +698,207 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
                 enviarMensaje(cliente->socket, texto);
 
                 // La acción ha sido válida: el turno pasa al otro jugador (y se le avisa)
-                cambiarTurno(partida);
+                cambiarTurno(partida, arrayClientes, numClientes);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------- REFORZAR
+    else if(strcmp(comando, "REFORZAR") == 0){
+
+        int filaO, colO, filaD, colD;
+        long unidades;
+        char *fin;
+        char extra[MAX_MSG];
+        char texto[MAX_MSG];
+        Partida *partida;
+
+        unidades = strtol(arg3, &fin, 10);
+
+        // El jugador debe estar dentro de una partida
+        if(cliente->estado != EST_JUGANDO){
+            enviarMensaje(cliente->socket,
+                        "-Err. Comando no válido en este momento");
+        }
+
+        // Comprobamos el formato
+        else if(campos != 4 ||
+                sscanf(buffer, "%*s %*s %*s %*s %s", extra) == 1 ||
+                *fin != '\0' ||
+                unidades <= 0){
+
+            enviarMensaje(cliente->socket,
+                        "-Err. Formato incorrecto. Uso: REFORZAR [origen] [destino] [unidades]");
+        }
+
+        // Debe ser el turno del jugador
+        else if(!esSuTurno(&partidas[cliente->partida], cliente->socket)){
+            enviarMensaje(cliente->socket, "-Err. No es tu turno");
+        }
+
+        // Comprobamos el territorio de origen
+        else if(!convertirTerritorio(arg1, &filaO, &colO)){
+            enviarMensaje(cliente->socket,
+                        "-Err. El territorio de origen no existe");
+        }
+
+        // Comprobamos el territorio de destino
+        else if(!convertirTerritorio(arg2, &filaD, &colD)){
+            enviarMensaje(cliente->socket,
+                        "-Err. El territorio de destino no existe");
+        }
+
+        else{
+            partida = &partidas[cliente->partida];
+
+            // El origen debe pertenecer al jugador
+            if(partida->tablero[filaO][colO].propietario !=
+            numeroJugador(partida, cliente->socket)){
+
+                enviarMensaje(cliente->socket,
+                            "-Err. El territorio de origen no te pertenece");
+            }
+
+            // El destino también debe pertenecer al jugador
+            else if(partida->tablero[filaD][colD].propietario !=
+                    numeroJugador(partida, cliente->socket)){
+
+                enviarMensaje(cliente->socket,
+                            "-Err. El territorio de destino no te pertenece");
+            }
+
+            // Deben ser territorios adyacentes
+            else if(!sonAdyacentes(filaO, colO, filaD, colD)){
+                enviarMensaje(cliente->socket,
+                            "-Err. Los territorios no son adyacentes");
+            }
+
+            // Debe haber suficientes unidades en el origen
+            else if(unidades > partida->tablero[filaO][colO].unidades){
+                enviarMensaje(cliente->socket,
+                            "-Err. No tienes suficientes unidades en el origen");
+            }
+
+            else{
+                // Quitamos las unidades del territorio de origen
+                partida->tablero[filaO][colO].unidades -= unidades;
+
+                // Si se queda sin unidades, lo dejamos neutral,
+                // siguiendo la lógica usada en CONQUISTAR y ATACAR
+                liberarSiVacio(partida, filaO, colO);
+
+                // Añadimos las unidades al destino
+                partida->tablero[filaD][colD].unidades += unidades;
+
+                snprintf(texto, sizeof(texto),
+                        "+Ok. Territorio %.2s reforzado.", arg2);
+
+                enviarMensaje(cliente->socket, texto);
+
+                // La acción válida termina el turno
+                cambiarTurno(partida, arrayClientes, numClientes);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- ATACAR
+    else if(strcmp(comando, "ATACAR") == 0){
+        // filaO, colO = fila y columna del territorio de origen; filaD, colD = las del destino
+        int filaO, colO, filaD, colD;
+        // unidades = nº de unidades que el jugador usa en el ataque
+        long unidades;
+        // fin = apunta al primer carácter que strtol no ha podido convertir en número
+        char * fin;
+        // extra = sirve para detectar si el mensaje trae una 5ª palabra de más
+        char extra[MAX_MSG];
+        // texto = mensaje de respuesta que se construye con snprintf
+        char texto[MAX_MSG];
+        // partida = la partida en la que juega el cliente
+        Partida * partida;
+        // socketRival = socket del jugador al que atacamos
+        int socketRival;
+
+        unidades = strtol(arg3, &fin, 10);
+
+        // 1) El jugador debe estar dentro de una partida
+        if(cliente->estado != EST_JUGANDO){
+            enviarMensaje(cliente->socket, "-Err. Comando no válido en este momento");
+        }
+        // 2) Formato: 4 palabras exactas y unidades = entero positivo
+        else if(campos != 4 || sscanf(buffer, "%*s %*s %*s %*s %s", extra) == 1 || *fin != '\0' || unidades <= 0){
+            enviarMensaje(cliente->socket, "-Err. Formato incorrecto. Uso: ATACAR [origen] [destino] [unidades]");
+        }
+        // 3) Debe ser su turno
+        else if(!esSuTurno(&partidas[cliente->partida], cliente->socket)){
+            enviarMensaje(cliente->socket, "-Err. No es tu turno");
+        }
+        // 4) El territorio de origen debe existir
+        else if(!convertirTerritorio(arg1, &filaO, &colO)){
+            enviarMensaje(cliente->socket, "-Err. El territorio de origen no existe");
+        }
+        // 5) El territorio de destino debe existir
+        else if(!convertirTerritorio(arg2, &filaD, &colD)){
+            enviarMensaje(cliente->socket, "-Err. El territorio de destino no existe");
+        }
+        else{
+            partida = &partidas[cliente->partida];
+            jugador = numeroJugador(partida, cliente->socket);
+
+            // 6) El territorio de origen debe pertenecer al atacante
+            if(partida->tablero[filaO][colO].propietario != jugador){
+                enviarMensaje(cliente->socket, "-Err. El territorio de origen no te pertenece");
+            }
+            // 7) No se puede atacar un territorio propio
+            else if(partida->tablero[filaD][colD].propietario == jugador){
+                enviarMensaje(cliente->socket, "-Err. No puedes atacar uno de tus propios territorios");
+            }
+            // 8) El destino debe pertenecer al rival (si es neutral no se ataca)
+            else if(partida->tablero[filaD][colD].propietario == 0){
+                enviarMensaje(cliente->socket, "-Err. El territorio de destino no pertenece a tu rival");
+            }
+            // 9) Los territorios deben ser adyacentes
+            else if(!sonAdyacentes(filaO, colO, filaD, colD)){
+                enviarMensaje(cliente->socket, "-Err. Los territorios no son adyacentes");
+            }
+            // 10) El origen debe tener suficientes unidades
+            else if(unidades > partida->tablero[filaO][colO].unidades){
+                enviarMensaje(cliente->socket, "-Err. No tienes suficientes unidades en el territorio de origen");
+            }
+            // Todas las condiciones se cumplen: se resuelve el ataque
+            else{
+                // Las unidades del ataque salen SIEMPRE del origen, gane o pierda el ataque
+                partida->tablero[filaO][colO].unidades -= unidades;
+                liberarSiVacio(partida, filaO, colO);
+
+                // Averiguamos el socket del rival (el jugador atacado)
+                if(jugador == 1)
+                    socketRival = partida->jugador2;
+                else
+                    socketRival = partida->jugador1;
+
+                // Ataque con éxito: solo si las unidades atacantes SUPERAN a las defensoras
+                if(unidades > partida->tablero[filaD][colD].unidades){
+                    // Las unidades del defensor se pierden y las atacantes ocupan el territorio
+                    partida->tablero[filaD][colD].propietario = jugador;
+                    partida->tablero[filaD][colD].unidades = unidades;
+
+                    snprintf(texto, sizeof(texto), "+Ok. Has conquistado el territorio %.2s.", arg2);
+                    enviarMensaje(cliente->socket, texto);
+
+                    snprintf(texto, sizeof(texto), "+Ok. Tu territorio %.2s ha sido conquistado.", arg2);
+                    enviarMensaje(socketRival, texto);
+                }
+                // Ataque fallido: las unidades atacantes se pierden y el defensor no cambia
+                else{
+                    snprintf(texto, sizeof(texto), "+Ok. Has perdido el ataque contra %.2s.", arg2);
+                    enviarMensaje(cliente->socket, texto);
+
+                    snprintf(texto, sizeof(texto), "+Ok. Tu territorio %.2s ha resistido un ataque.", arg2);
+                    enviarMensaje(socketRival, texto);
+                }
+
+                // La acción ha sido válida: el turno pasa al otro jugador (y se le avisa)
+                cambiarTurno(partida, arrayClientes, numClientes);
             }
         }
     }
@@ -905,23 +1107,6 @@ void iniciarTurnos(Partida * partida){
         enviarMensaje(partida->jugador1, "+Ok. Empieza tu oponente");
 }
 
-// Termina el turno actual y le pasa el turno al otro jugador.
-// Se llamará después de cada acción válida (PASAR ahora, y más adelante CONQUISTAR, ATACAR y REFORZAR)
-void cambiarTurno(Partida * partida){
-    // Se ha completado un turno más
-    partida->numTurnos++;
-
-    // El turno pasa al otro jugador: si era el 1 ahora es el 2 y viceversa
-    if(partida->turno == 1)
-        partida->turno = 2;
-    else
-        partida->turno = 1;
-
-    // Aquí, cuando numTurnos llegue a MAX_TURNOS, tendrá que terminar la partida (siguiente paso)
-
-    // Avisamos al jugador al que le toca
-    avisarTurno(partida);
-}
 
 
 // Convierte un territorio escrito como texto (por ejemplo "B3") en fila y columna del tablero.
@@ -964,4 +1149,170 @@ int sonAdyacentes(int f1, int c1, int f2, int c2){
     //   - Más lejos:           suma mayor que 1          -> NO adyacentes
     // Por tanto son adyacentes únicamente cuando la suma vale exactamente 1
     return abs(f1 - f2) + abs(c1 - c2) == 1;
+}
+
+void liberarSiVacio(Partida *partida, int fila, int columna){
+    if(partida->tablero[fila][columna].unidades == 0){
+        partida->tablero[fila][columna].propietario =0;
+    }
+}
+
+int contarTerritorios(Partida *partida, int jugador)
+{
+    int contador = 0;
+
+    for (int fila = 0; fila < FILAS; fila++) {
+        for (int columna = 0; columna < COLUMNAS; columna++) {
+            if (partida->tablero[fila][columna].propietario == jugador)
+                contador++;
+        }
+    }
+
+    return contador;
+}
+
+void finalizarPartida(Partida *partida,
+                      Cliente arrayClientes[],
+                      int numClientes)
+{
+    int territorios1 = 0;
+    int territorios2 = 0;
+    int unidades1 = 0;
+    int unidades2 = 0;
+    int ganador = 0;
+    int pos1;
+    int pos2;
+    char mensaje[MAX_MSG];
+
+    for (int fila = 0; fila < FILAS; fila++) {
+        for (int columna = 0; columna < COLUMNAS; columna++) {
+            Territorio *territorio =
+                &partida->tablero[fila][columna];
+
+            if (territorio->propietario == 1) {
+                territorios1++;
+                unidades1 += territorio->unidades;
+            }
+            else if (territorio->propietario == 2) {
+                territorios2++;
+                unidades2 += territorio->unidades;
+            }
+        }
+    }
+
+    /*
+     * Primero gana quien controla más territorios.
+     * Si hay empate, se comparan las unidades.
+     */
+    if (territorios1 > territorios2)
+        ganador = 1;
+    else if (territorios2 > territorios1)
+        ganador = 2;
+    else if (unidades1 > unidades2)
+        ganador = 1;
+    else if (unidades2 > unidades1)
+        ganador = 2;
+
+    pos1 = buscarCliente(partida->jugador1,
+                         arrayClientes,
+                         numClientes);
+
+    pos2 = buscarCliente(partida->jugador2,
+                         arrayClientes,
+                         numClientes);
+
+    if (ganador == 0) {
+        snprintf(mensaje, sizeof(mensaje),
+                 "+Ok. Fin de la partida: empate. J1 territorios=%d, J2 territorios=%d.",
+                 territorios1, territorios2);
+
+        if (pos1 != -1)
+            enviarMensaje(arrayClientes[pos1].socket, mensaje);
+
+        if (pos2 != -1)
+            enviarMensaje(arrayClientes[pos2].socket, mensaje);
+    }
+    else {
+        if (pos1 != -1) {
+            if (ganador == 1) {
+                snprintf(mensaje, sizeof(mensaje),
+                         "+Ok. Fin de la partida: has ganado. Territorios=%d, unidades=%d.",
+                         territorios1, unidades1);
+            }
+            else {
+                snprintf(mensaje, sizeof(mensaje),
+                         "+Ok. Fin de la partida: has perdido. Territorios=%d, unidades=%d.",
+                         territorios1, unidades1);
+            }
+
+            enviarMensaje(arrayClientes[pos1].socket, mensaje);
+        }
+
+        if (pos2 != -1) {
+            if (ganador == 2) {
+                snprintf(mensaje, sizeof(mensaje),
+                         "+Ok. Fin de la partida: has ganado. Territorios=%d, unidades=%d.",
+                         territorios2, unidades2);
+            }
+            else {
+                snprintf(mensaje, sizeof(mensaje),
+                         "+Ok. Fin de la partida: has perdido. Territorios=%d, unidades=%d.",
+                         territorios2, unidades2);
+            }
+
+            enviarMensaje(arrayClientes[pos2].socket, mensaje);
+        }
+    }
+
+    /*
+     * Los jugadores siguen conectados, pero ya no están jugando.
+     */
+    if (pos1 != -1) {
+        arrayClientes[pos1].estado = EST_VALIDADO;
+        arrayClientes[pos1].partida = -1;
+    }
+
+    if (pos2 != -1) {
+        arrayClientes[pos2].estado = EST_VALIDADO;
+        arrayClientes[pos2].partida = -1;
+    }
+
+    partida->activa = 0;
+    partida->jugador1 = -1;
+    partida->jugador2 = -1;
+    partida->turno = 0;
+    partida->numTurnos = 0;
+}
+
+void cambiarTurno(Partida *partida,
+                  Cliente arrayClientes[],
+                  int numClientes)
+{
+    int territorios1;
+    int territorios2;
+
+    partida->numTurnos++;
+
+    territorios1 = contarTerritorios(partida, 1);
+    territorios2 = contarTerritorios(partida, 2);
+
+    /*
+     * La partida termina si:
+     * - se alcanzan 10 turnos;
+     * - un jugador se queda sin territorios.
+     */
+    if (partida->numTurnos >= MAX_TURNOS ||
+        territorios1 == 0 ||
+        territorios2 == 0) {
+
+        finalizarPartida(partida, arrayClientes, numClientes);
+        return;
+    }
+
+    if (partida->turno == 1)
+        partida->turno = 2;
+    else
+        partida->turno = 1;
+
+    avisarTurno(partida);
 }
