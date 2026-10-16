@@ -14,9 +14,8 @@
 //  CONSTANTES
 // ============================================================================
 
-// Tamaño de TODOS los mensajes que se envían/reciben (el enunciado dice máx. 200 caracteres,
-// usamos 250 para tener margen y el '\0' final)
-#define MAX_MSG 250
+// Tamaño de TODOS los mensajes que se envían/reciben 
+#define MAX_MSG 200
 // Puerto en el que escucha el servidor (lo exige el enunciado)
 #define PUERTO 2026
 // Máximo de clientes conectados a la vez (lo exige el enunciado)

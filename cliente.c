@@ -9,7 +9,7 @@
 #include <arpa/inet.h>
 #include <sys/select.h>
 
-#define MSG_SIZE 250
+#define MSG_SIZE 200
 
 int main ( )
 {
