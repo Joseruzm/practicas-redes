@@ -10,10 +10,6 @@
 #include <sys/select.h>     
 #include <time.h>
 
-// ============================================================================
-//  CONSTANTES
-// ============================================================================
-
 // Tamaño de TODOS los mensajes que se envían/reciben 
 #define MAX_MSG 200
 // Puerto en el que escucha el servidor (lo exige el enunciado)
@@ -53,9 +49,6 @@ typedef struct {
     int unidades;     // Cuántas tropas hay en el territorio y vale 0 si el territorio es neutral
 } Territorio;
 
-// ============================================================================
-//  ESTRUCTURAS DE DATOS
-// ============================================================================
 
 // Toda la información que el servidor guarda de cada cliente conectado
 typedef struct{
@@ -78,9 +71,8 @@ typedef struct{
     int numTurnos;      // Cuántos turnos se han completado ya en la partida (empieza en 0)
 } Partida;
 
-// ============================================================================
-//  PROTOTIPOS de funciones auxiliares
-// ============================================================================
+
+//  PROTOTIPOS DE FUNCIONES AUXILIARES
 
 // Elimina a un cliente (cierra su socket, lo saca del array y termina su partida si estaba jugando)
 void salirCliente(int socket, fd_set * readfds, int * numClientes, Cliente arrayClientes[], Partida partidas[]);
@@ -140,9 +132,7 @@ void finalizarPartida(Partida *partida, Cliente arrayClientes[], int numClientes
 
 void cambiarTurno(Partida *partida, Cliente arrayClientes[], int numClientes);
 
-// ============================================================================
-//  MAIN
-// ============================================================================
+
 int main(){
     // Inicializamos el generador de números aleatorios
     srand(time(NULL));
@@ -232,9 +222,7 @@ int main(){
     // sizeof(partidas) vale el tamaño de TODO el array porque está declarado en esta función
     bzero(partidas, sizeof(partidas));
 
-    // ------------------------------------------------------------------------
-    //  BUCLE PRINCIPAL DEL SERVIDOR (no termina nunca)
-    // ------------------------------------------------------------------------
+    // Bucle principal 
     while(1){
 
         // Copiamos el conjunto original, porque select va a modificar auxfds
