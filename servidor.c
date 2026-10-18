@@ -204,7 +204,7 @@ int main(){
 
     // Ponemos el socket en modo escucha (pasivo). El 2º parámetro es el tamaño
     // de la cola de conexiones pendientes de aceptar
-    if(listen(sd, 1) == -1){
+    if(listen(sd, MAX_CLIENTES) == -1){
         perror("Error en la operación listen");
         exit(1);
     }
@@ -432,7 +432,7 @@ void procesarMensaje(Cliente * cliente, char buffer[], Cliente arrayClientes[], 
     // campos = cuántas palabras tiene el mensaje (comando + argumentos)
     // sscanf con %s separa por espacios y devuelve cuántas ha podido leer.
     // Así "REGISTRO ana 1234" -> comando="REGISTRO", arg1="ana", arg2="1234", campos=3
-    campos = sscanf(buffer, "%s %s %s %s", comando, arg1, arg2, arg3);
+    campos = sscanf(buffer, "%199s %199s %199s %199s", comando, arg1, arg2, arg3);
 
     // ---------------------------------------------------------------- USUARIO
     if(strcmp(comando, "USUARIO") == 0){
